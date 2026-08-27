@@ -1,0 +1,83 @@
+name: Frontend CI Pipeline 
+
+on:
+  workflow_dispatch: # Let me click the button to run it manually
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'starter/frontend/**' # Only run if changes are inside this folder
+
+jobs:
+  # Job 1: Check code formatting/quality
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Grab the code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # Pulls old packages out of GitHub's memory if lockfile hasn't changed
+      - name: Grab npm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('starter/frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: |
+          cd starter/frontend
+          npm ci
+
+      - name: Run Linting
+        run: |
+          cd starter/frontend
+          npm run lint
+
+  # Job 2: Run test suite (happens at the exact same time as lint)
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Grab the code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Grab npm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('starter/frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: |
+          cd starter/frontend
+          npm ci
+
+      - name: Run Tests (CI Mode)
+        run: |
+          cd starter/frontend
+          CI=true npm run test
+
+  # Job 3: Try building the Docker image (only runs if lint + test pass)
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - name: Grab the code
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image locally
+        run: |
+          docker build --build-arg=REACT_APP_MOVIE_API_URL=http://localhost:5000 -t mp-frontend:latest ./starter/frontend
