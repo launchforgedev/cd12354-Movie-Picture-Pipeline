@@ -1,0 +1,117 @@
+name: Backend CD Pipeline
+
+on:
+  workflow_dispatch: # Let me click the button to run it whenever
+  push:
+    branches:
+      - main
+    paths:
+      - "starter/backend/**"
+
+jobs:
+  # Job 1: Quick check to make sure code isn't ugly
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Grab the code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install pipenv
+        run: |
+          cd starter/backend
+          pip install pipenv
+
+      - name: Install dependencies
+        run: |
+          cd starter/backend
+          pipenv install --dev
+
+      - name: Run Linting
+        run: |
+          cd starter/backend
+          pipenv run lint
+
+  # Job 2: Run tests in parallel with linting
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Grab the code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install pipenv
+        run: |
+          cd starter/backend
+          pip install pipenv
+
+      - name: Install dependencies
+        run: |
+          cd starter/backend
+          pipenv install --dev
+          
+
+      - name: Run Tests (CI Mode)
+        run: |
+          cd starter/backend
+          pipenv run test
+
+  # Job 3: The actual deployment stuff (only happens if lint + test pass)
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - name: Grab the code
+        uses: actions/checkout@v4
+
+      - name: Get Short Git SHA
+        run: |
+          echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Log into AWS ECR
+        run: |
+          export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
+          export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          export AWS_DEFAULT_REGION="${{ secrets.AWS_REGION }}"
+
+          aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${{ secrets.AWS_REGISTRY_URL }}
+
+      - name: Build, Tag, and Push Docker Image
+        run: |
+          REGISTRY="${{ secrets.AWS_REGISTRY_URL }}"
+          REPO="${{ secrets.ECR_REPOSITORY }}"
+
+          docker build --build-arg=REACT_APP_MOVIE_API_URL=$API_URL -t backend:$SHORT_SHA ./starter/backend
+
+          docker tag backend:$SHORT_SHA $REGISTRY/$REPO:$SHORT_SHA
+
+          docker push $REGISTRY/$REPO:$SHORT_SHA
+
+      - name: Setup Kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Update Manifest and Deploy
+        run: |
+          cd starter/backend/k8s
+
+          REGISTRY="${{ secrets.AWS_REGISTRY_URL }}"
+          REPO="${{ secrets.ECR_REPOSITORY }}"
+
+          sed -i "s|image: backend|image: $REGISTRY/$REPO:$SHORT_SHA|g" deployment.yaml
+
+          kubectl apply -f deployment.yaml
+
+      - name: Check if it actually deployed
+        run: |
+          kubectl rollout status deployment/backend --timeout=118s
