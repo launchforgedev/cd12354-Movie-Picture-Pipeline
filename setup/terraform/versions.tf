@@ -1,13 +1,28 @@
-provider "aws" {
-  region = "us-east-1"
-}
-
 terraform {
-  required_version = "1.3.9"
+  required_version = ">= 1.6.0"
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "4.55.0"
+      version = "~> 5.0"
     }
   }
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Environment = "Production"
+      ManagedBy   = "Terraform"
+      Project     = "Udacity"
+    }
+  }
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS Region to deploy resources"
+  default     = "us-east-1"
 }
