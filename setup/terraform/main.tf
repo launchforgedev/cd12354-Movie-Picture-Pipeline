@@ -26,6 +26,27 @@ resource "aws_internet_gateway" "igw" {
   }
 }
 
+# Elastic IP for NAT Gateway
+resource "aws_eip" "nat" {
+  domain = "vpc"
+
+  tags = {
+    Name = "udacity-nat-eip"
+  }
+}
+
+# NAT Gateway (placed in the first Public Subnet)
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public_subnet[0].id
+
+  tags = {
+    Name = "udacity-nat"
+  }
+
+  depends_on = [aws_internet_gateway.igw]
+}
+
 # Public Subnets (spanning multiple AZs)
 resource "aws_subnet" "public_subnet" {
   count                   = length(var.availability_zones)
@@ -35,8 +56,8 @@ resource "aws_subnet" "public_subnet" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name                                     = "udacity-public-${var.availability_zones[count.index]}"
-    "kubernetes.io/role/elb"                 = "1"
+    Name                                    = "udacity-public-${var.availability_zones[count.index]}"
+    "kubernetes.io/role/elb"                = "1"
     "kubernetes.io/cluster/udacity-cluster" = "shared"
   }
 }
@@ -49,8 +70,8 @@ resource "aws_subnet" "private_subnet" {
   availability_zone = var.availability_zones[count.index]
 
   tags = {
-    Name                                     = "udacity-private-${var.availability_zones[count.index]}"
-    "kubernetes.io/role/internal-elb"        = "1"
+    Name                                    = "udacity-private-${var.availability_zones[count.index]}"
+    "kubernetes.io/role/internal-elb"       = "1"
     "kubernetes.io/cluster/udacity-cluster" = "shared"
   }
 }
@@ -75,9 +96,14 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# Private Route Table
+# Private Route Table (Routes outbound traffic via NAT Gateway)
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.vpc.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat.id
+  }
 
   tags = {
     Name = "udacity-private-rt"
@@ -91,7 +117,7 @@ resource "aws_route_table_association" "private" {
 }
 
 ################################################################################
-# VPC Endpoints (Private Endpoint Access)
+# VPC Endpoints (Optional Private Endpoint Access)
 ################################################################################
 resource "aws_vpc_endpoint" "s3" {
   count             = var.enable_private ? 1 : 0
@@ -219,7 +245,6 @@ resource "aws_iam_role_policy_attachment" "eks_service" {
 ################################################################################
 # EKS Managed Node Group
 ################################################################################
-# Updated SSM parameter path to match AL2023
 data "aws_ssm_parameter" "eks_ami_release_version" {
   name = "/aws/service/eks/optimized-ami/${aws_eks_cluster.main.version}/amazon-linux-2023/x86_64/standard/recommended/release_version"
 }
@@ -246,13 +271,14 @@ resource "aws_eks_node_group" "main" {
   }
 
   depends_on = [
+    aws_route_table_association.private,
     aws_iam_role_policy_attachment.eks_worker_node_policy,
     aws_iam_role_policy_attachment.eks_cni_policy,
     aws_iam_role_policy_attachment.eks_container_registry_read_only,
   ]
 }
 
-# Unified IAM Role for Node Group (matching node_role_arn = aws_iam_role.eks_nodes.arn)
+# Unified IAM Role for Node Group
 resource "aws_iam_role" "eks_nodes" {
   name = "udacity-node-group-role"
 
@@ -343,14 +369,12 @@ resource "aws_iam_role_policy_attachment" "codebuild" {
 ################################################################################
 # GitHub Actions OIDC Setup
 ################################################################################
-# 1. OpenID Connect Provider Resource for GitHub
 resource "aws_iam_openid_connect_provider" "github" {
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1", "1c58a21d2c52a7a1be3f50730d3019273c389813"]
 }
 
-# 2. Trust Policy for GitHub OIDC Role
 data "aws_iam_policy_document" "github_oidc_trust" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -367,7 +391,6 @@ data "aws_iam_policy_document" "github_oidc_trust" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Scoped condition required by AWS to satisfy MalformedPolicyDocument rules
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
