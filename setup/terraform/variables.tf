@@ -1,19 +1,17 @@
 variable "k8s_version" {
-  default = "1.25"
+  type        = string
+  description = "Kubernetes version for the EKS cluster"
+  default     = "1.30"
 }
 
 variable "enable_private" {
-  default = false
+  type        = bool
+  description = "Enable private endpoints and isolate cluster within private subnets"
+  default     = false
 }
 
-variable "public_az" {
-  type        = string
-  description = "Change this to a letter a-f only if you encounter an error during setup"
-  default     = "a"
-}
-
-variable "private_az" {
-  type        = string
-  description = "Change this to a letter a-f only if you encounter an error during setup"
-  default     = "b"
+variable "availability_zones" {
+  type        = list(string)
+  description = "List of Availability Zones for multi-AZ subnet deployment (EKS requires at least 2)"
+  default     = ["us-east-1a", "us-east-1b"]
 }
