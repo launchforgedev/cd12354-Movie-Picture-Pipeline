@@ -37,7 +37,7 @@ resource "aws_subnet" "public_subnet" {
   tags = {
     Name                                     = "udacity-public-${var.availability_zones[count.index]}"
     "kubernetes.io/role/elb"                 = "1"
-    "kubernetes.io/cluster/udacity-cluster"  = "shared"
+    "kubernetes.io/cluster/udacity-cluster" = "shared"
   }
 }
 
@@ -51,7 +51,7 @@ resource "aws_subnet" "private_subnet" {
   tags = {
     Name                                     = "udacity-private-${var.availability_zones[count.index]}"
     "kubernetes.io/role/internal-elb"        = "1"
-    "kubernetes.io/cluster/udacity-cluster"  = "shared"
+    "kubernetes.io/cluster/udacity-cluster" = "shared"
   }
 }
 
@@ -93,7 +93,6 @@ resource "aws_route_table_association" "private" {
 ################################################################################
 # VPC Endpoints (Private Endpoint Access)
 ################################################################################
-# S3 Gateway Endpoint (Crucial for ECR layer downloads in private subnets)
 resource "aws_vpc_endpoint" "s3" {
   count             = var.enable_private ? 1 : 0
   vpc_id            = aws_vpc.vpc.id
@@ -106,7 +105,6 @@ resource "aws_vpc_endpoint" "s3" {
   }
 }
 
-# Interface Endpoints for EKS, EC2, and ECR
 resource "aws_vpc_endpoint" "eks" {
   count               = var.enable_private ? 1 : 0
   vpc_id              = aws_vpc.vpc.id
@@ -221,8 +219,9 @@ resource "aws_iam_role_policy_attachment" "eks_service" {
 ################################################################################
 # EKS Managed Node Group
 ################################################################################
+# Updated SSM parameter path to match AL2023
 data "aws_ssm_parameter" "eks_ami_release_version" {
-  name = "/aws/service/eks/optimized-ami/${aws_eks_cluster.main.version}/amazon-linux-2/recommended/release_version"
+  name = "/aws/service/eks/optimized-ami/${aws_eks_cluster.main.version}/amazon-linux-2023/x86_64/standard/recommended/release_version"
 }
 
 resource "aws_eks_node_group" "main" {
@@ -241,7 +240,6 @@ resource "aws_eks_node_group" "main" {
     min_size     = 1
   }
 
-  # TOP-LEVEL lifecycle block (must not be inside scaling_config or other sub-blocks)
   lifecycle {
     create_before_destroy = true
     ignore_changes        = [scaling_config[0].desired_size]
@@ -254,8 +252,8 @@ resource "aws_eks_node_group" "main" {
   ]
 }
 
-# IAM Role for Node Group
-resource "aws_iam_role" "node_group" {
+# Unified IAM Role for Node Group (matching node_role_arn = aws_iam_role.eks_nodes.arn)
+resource "aws_iam_role" "eks_nodes" {
   name = "udacity-node-group-role"
 
   assume_role_policy = jsonencode({
@@ -272,18 +270,18 @@ resource "aws_iam_role" "node_group" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "node_group_policy" {
-  role       = aws_iam_role.node_group.name
+resource "aws_iam_role_policy_attachment" "eks_worker_node_policy" {
+  role       = aws_iam_role.eks_nodes.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
 }
 
-resource "aws_iam_role_policy_attachment" "cni_policy" {
-  role       = aws_iam_role.node_group.name
+resource "aws_iam_role_policy_attachment" "eks_cni_policy" {
+  role       = aws_iam_role.eks_nodes.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 }
 
-resource "aws_iam_role_policy_attachment" "ecr_policy" {
-  role       = aws_iam_role.node_group.name
+resource "aws_iam_role_policy_attachment" "eks_container_registry_read_only" {
+  role       = aws_iam_role.eks_nodes.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
@@ -343,8 +341,16 @@ resource "aws_iam_role_policy_attachment" "codebuild" {
 }
 
 ################################################################################
-# GitHub Actions Role (OIDC - Safe Alternative to IAM User)
+# GitHub Actions OIDC Setup
 ################################################################################
+# 1. OpenID Connect Provider Resource for GitHub
+resource "aws_iam_openid_connect_provider" "github" {
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1", "1c58a21d2c52a7a1be3f50730d3019273c389813"]
+}
+
+# 2. Trust Policy for GitHub OIDC Role
 data "aws_iam_policy_document" "github_oidc_trust" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -352,13 +358,20 @@ data "aws_iam_policy_document" "github_oidc_trust" {
 
     principals {
       type        = "Federated"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"]
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
     }
 
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:aud"
       values   = ["sts.amazonaws.com"]
+    }
+
+    # Scoped condition required by AWS to satisfy MalformedPolicyDocument rules
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:*/*:*"]
     }
   }
 }
