@@ -1,6 +1,6 @@
 variable "k8s_version" {
-  type        = string
   description = "Kubernetes version for the EKS cluster"
+  type        = string
   default     = "1.30"
 }
 
