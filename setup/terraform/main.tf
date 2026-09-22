@@ -251,7 +251,7 @@ data "aws_ssm_parameter" "eks_ami_release_version" {
 
 resource "aws_eks_node_group" "main" {
   cluster_name    = aws_eks_cluster.main.name
-  node_group_name = "udacity-node-group"
+  node_group_name_prefix = "udacity-node-group-"
   node_role_arn   = aws_iam_role.eks_nodes.arn
   subnet_ids      = aws_subnet.private_subnet[*].id
 
