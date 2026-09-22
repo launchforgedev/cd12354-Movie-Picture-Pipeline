@@ -231,7 +231,6 @@ resource "aws_eks_node_group" "main" {
   node_role_arn   = aws_iam_role.eks_nodes.arn
   subnet_ids      = aws_subnet.private_subnet[*].id
 
-  # AL2023 is required for EKS 1.30+
   ami_type       = "AL2023_x86_64_STANDARD"
   capacity_type  = "ON_DEMAND"
   instance_types = ["t3.small"]
@@ -242,16 +241,17 @@ resource "aws_eks_node_group" "main" {
     min_size     = 1
   }
 
+  # TOP-LEVEL lifecycle block (must not be inside scaling_config or other sub-blocks)
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes        = [scaling_config[0].desired_size]
+  }
+
   depends_on = [
     aws_iam_role_policy_attachment.eks_worker_node_policy,
     aws_iam_role_policy_attachment.eks_cni_policy,
     aws_iam_role_policy_attachment.eks_container_registry_read_only,
   ]
-}
-
-  lifecycle {
-    ignore_changes = [scaling_config[0].desired_size]
-  }
 }
 
 # IAM Role for Node Group
